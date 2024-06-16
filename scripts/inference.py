@@ -1,6 +1,8 @@
 # pylint: disable=E1101
 # scripts/inference.py
 
+
+
 """
 This script contains the main inference pipeline for processing audio and image inputs to generate a video output.
 
@@ -30,6 +32,10 @@ python scripts/inference.py --audio_path audio.wav --image_path image.jpg
 
 import argparse
 import os
+
+from loguru import logger
+
+from tqdm import tqdm
 
 import torch
 from diffusers import AutoencoderKL, DDIMScheduler
@@ -113,31 +119,32 @@ def process_audio_emb(audio_emb):
     return audio_emb
 
 
-
 def inference_process(args: argparse.Namespace):
-    """
-    Perform inference processing.
-
-    Args:
-        args (argparse.Namespace): Command-line arguments.
-
-    This function initializes the configuration for the inference process. It sets up the necessary
-    modules and variables to prepare for the upcoming inference steps.
-    """
+    logger.info(f"推論処理を開始します。コンフィグファイル: {args.config}")
+    
     # 1. init config
+    logger.info("コンフィグを初期化します。")
     config = OmegaConf.load(args.config)
     config = OmegaConf.merge(config, vars(args))
     source_image_path = config.source_image
     driving_audio_path = config.driving_audio
     save_path = config.save_path
+    logger.info(f"ソース画像: {source_image_path}")
+    logger.info(f"ドライビングオーディオ: {driving_audio_path}")
+    logger.info(f"保存パス: {save_path}")
     if not os.path.exists(save_path):
         os.makedirs(save_path)
     motion_scale = [config.pose_weight, config.face_weight, config.lip_weight]
+    logger.info(f"モーションスケール: {motion_scale}")
     if args.checkpoint is not None:
         config.audio_ckpt_dir = args.checkpoint
+        logger.info(f"チェックポイントディレクトリ: {config.audio_ckpt_dir}")
+    
     # 2. runtime variables
+    logger.info("ランタイム変数を設定します。")
     device = torch.device(
         "cuda") if torch.cuda.is_available() else torch.device("cpu")
+    logger.info(f"使用デバイス: {device}")
     if config.weight_dtype == "fp16":
         weight_dtype = torch.float16
     elif config.weight_dtype == "bf16":
@@ -146,13 +153,19 @@ def inference_process(args: argparse.Namespace):
         weight_dtype = torch.float32
     else:
         weight_dtype = torch.float32
+    logger.info(f"重みのデータ型: {weight_dtype}")
 
     # 3. prepare inference data
+    logger.info("推論データを準備します。")
     # 3.1 prepare source image, face mask, face embeddings
+    logger.info("ソース画像、顔マスク、顔の埋め込みを準備します。")
     img_size = (config.data.source_image.width,
                 config.data.source_image.height)
+    logger.info(f"画像サイズ: {img_size}")
     clip_length = config.data.n_sample_frames
+    logger.info(f"クリップ長: {clip_length}")
     face_analysis_model_path = config.face_analysis.model_path
+    logger.info(f"顔分析モデルのパス: {face_analysis_model_path}")
     with ImageProcessor(img_size, face_analysis_model_path) as image_processor:
         source_image_pixels, \
         source_image_face_region, \
@@ -163,12 +176,18 @@ def inference_process(args: argparse.Namespace):
             source_image_path, save_path, config.face_expand_ratio)
 
     # 3.2 prepare audio embeddings
+    logger.info("オーディオの埋め込みを準備します。")
     sample_rate = config.data.driving_audio.sample_rate
-    assert sample_rate == 16000, "audio sample rate must be 16000"
+    assert sample_rate == 16000, "オーディオのサンプルレートは16000でなければなりません"
+    logger.info(f"オーディオのサンプルレート: {sample_rate}")
     fps = config.data.export_video.fps
+    logger.info(f"フレームレート: {fps}")
     wav2vec_model_path = config.wav2vec.model_path
+    logger.info(f"Wav2Vecモデルのパス: {wav2vec_model_path}")
     wav2vec_only_last_features = config.wav2vec.features == "last"
+    logger.info(f"Wav2Vecの最後の特徴量のみを使用: {wav2vec_only_last_features}")
     audio_separator_model_file = config.audio_separator.model_path
+    logger.info(f"オーディオ分離モデルのパス: {audio_separator_model_file}")
     with AudioProcessor(
         sample_rate,
         fps,
@@ -181,19 +200,24 @@ def inference_process(args: argparse.Namespace):
         audio_emb = audio_processor.preprocess(driving_audio_path)
 
     # 4. build modules
+    logger.info("モジュールを構築します。")
     sched_kwargs = OmegaConf.to_container(config.noise_scheduler_kwargs)
+    logger.info(f"ノイズスケジューラーの引数: {sched_kwargs}")
     if config.enable_zero_snr:
         sched_kwargs.update(
             rescale_betas_zero_snr=True,
             timestep_spacing="trailing",
             prediction_type="v_prediction",
         )
+        logger.info("ゼロSNRを有効化")
     val_noise_scheduler = DDIMScheduler(**sched_kwargs)
     sched_kwargs.update({"beta_schedule": "scaled_linear"})
 
     vae = AutoencoderKL.from_pretrained(config.vae.model_path)
+    logger.info(f"VAEモデルのパス: {config.vae.model_path}")
     reference_unet = UNet2DConditionModel.from_pretrained(
         config.base_model_path, subfolder="unet")
+    logger.info(f"参照UNetモデルのパス: {config.base_model_path}")
     denoising_unet = UNet3DConditionModel.from_pretrained_2d(
         config.base_model_path,
         config.motion_module_path,
@@ -202,12 +226,14 @@ def inference_process(args: argparse.Namespace):
             config.unet_additional_kwargs),
         use_landmark=False,
     )
+    logger.info(f"デノイジングUNetモデルのパス: {config.base_model_path}")
     face_locator = FaceLocator(conditioning_embedding_channels=320)
     image_proj = ImageProjModel(
         cross_attention_dim=denoising_unet.config.cross_attention_dim,
         clip_embeddings_dim=512,
         clip_extra_context_tokens=4,
     )
+    logger.info(f"イメージプロジェクションモデルの引数: cross_attention_dim={denoising_unet.config.cross_attention_dim}, clip_embeddings_dim=512, clip_extra_context_tokens=4")
 
     audio_proj = AudioProjModel(
         seq_len=5,
@@ -217,9 +243,9 @@ def inference_process(args: argparse.Namespace):
         output_dim=768,
         context_tokens=32,
     ).to(device=device, dtype=weight_dtype)
+    logger.info(f"オーディオプロジェクションモデルの引数: seq_len=5, blocks=12, channels=768, intermediate_dim=512, output_dim=768, context_tokens=32")
 
     audio_ckpt_dir = config.audio_ckpt_dir
-
 
     # Freeze
     vae.requires_grad_(False)
@@ -228,9 +254,11 @@ def inference_process(args: argparse.Namespace):
     denoising_unet.requires_grad_(False)
     face_locator.requires_grad_(False)
     audio_proj.requires_grad_(False)
+    logger.info("VAE, イメージプロジェクション, 参照UNet, デノイジングUNet, 顔ロケーター, オーディオプロジェクションをフリーズ")
 
     reference_unet.enable_gradient_checkpointing()
     denoising_unet.enable_gradient_checkpointing()
+    logger.info("参照UNetとデノイジングUNetでgradient checkpointingを有効化")
 
     net = Net(
         reference_unet,
@@ -239,6 +267,7 @@ def inference_process(args: argparse.Namespace):
         image_proj,
         audio_proj,
     )
+    logger.info("ネットワークを構築")
 
     m,u = net.load_state_dict(
         torch.load(
@@ -246,10 +275,11 @@ def inference_process(args: argparse.Namespace):
             map_location="cpu",
         ),
     )
-    assert len(m) == 0 and len(u) == 0, "Fail to load correct checkpoint."
-    print("loaded weight from ", os.path.join(audio_ckpt_dir, "net.pth"))
+    assert len(m) == 0 and len(u) == 0, "正しいチェックポイントを読み込めませんでした。"
+    logger.info(f"{os.path.join(audio_ckpt_dir, 'net.pth')} から重みを読み込みました")
 
     # 5. inference
+    logger.info("推論を開始します。")
     pipeline = FaceAnimatePipeline(
         vae=vae,
         reference_unet=net.reference_unet,
@@ -259,6 +289,7 @@ def inference_process(args: argparse.Namespace):
         image_proj=net.imageproj,
     )
     pipeline.to(device=device, dtype=weight_dtype)
+    logger.info(f"パイプラインを{device}上の{weight_dtype}に設定")
 
     audio_emb = process_audio_emb(audio_emb)
 
@@ -280,17 +311,19 @@ def inference_process(args: argparse.Namespace):
         for mask in source_image_lip_mask
     ]
 
-
     times = audio_emb.shape[0] // clip_length
+    logger.info(f"総イテレーション数: {times}")
 
     tensor_result = []
 
     generator = torch.manual_seed(42)
+    logger.info(f"ジェネレーターのシード値: {generator.initial_seed()}")
 
-    for t in range(times):
-
+    for t in tqdm(range(times), desc="イテレーション中"):
+        logger.info(f"イテレーション {t+1}/{times} を処理中")
+        
         if len(tensor_result) == 0:
-            # The first iteration
+            logger.info("最初のイテレーションを処理中")
             motion_zeros = source_image_pixels.repeat(
                 config.data.n_motion_frames, 1, 1, 1)
             motion_zeros = motion_zeros.to(
@@ -298,6 +331,7 @@ def inference_process(args: argparse.Namespace):
             pixel_values_ref_img = torch.cat(
                 [source_image_pixels, motion_zeros], dim=0)  # concat the ref image and the first motion frames
         else:
+            logger.info("前のイテレーションの結果を使用")
             motion_frames = tensor_result[-1][0]
             motion_frames = motion_frames.permute(1, 0, 2, 3)
             motion_frames = motion_frames[0-config.data.n_motion_frames:]
@@ -317,6 +351,7 @@ def inference_process(args: argparse.Namespace):
             device=net.audioproj.device, dtype=net.audioproj.dtype)
         audio_tensor = net.audioproj(audio_tensor)
 
+        logger.info("パイプラインを実行")
         pipeline_output = pipeline(
             ref_image=pixel_values_ref_img,
             audio_tensor=audio_tensor,
@@ -333,22 +368,27 @@ def inference_process(args: argparse.Namespace):
             generator=generator,
             motion_scale=motion_scale,
         )
+        logger.info(f"パイプライン出力のシェイプ: {pipeline_output.videos.shape}")
 
         tensor_result.append(pipeline_output.videos)
 
+    logger.info("テンソル結果を結合")
     tensor_result = torch.cat(tensor_result, dim=2)
     tensor_result = tensor_result.squeeze(0)
+    logger.info(f"最終的なテンソル結果のシェイプ: {tensor_result.shape}")
 
     output_file = config.output
-    # save the result after all iteration
+    logger.info(f"結果を {output_file} に保存")
     tensor_to_video(tensor_result, output_file, driving_audio_path)
-
+    
+    logger.info("推論処理が完了しました。")
+    
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
 
     parser.add_argument(
-        "-c", "--config", default="configs/inference/default.yaml")
+        "-c", "--config", default="/app/configs/inference/default.yaml")
     parser.add_argument("--source_image", type=str, required=False,
                         help="source image", default="test_data/source_images/6.jpg")
     parser.add_argument("--driving_audio", type=str, required=False,
