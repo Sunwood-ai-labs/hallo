@@ -1,0 +1,17 @@
+version: '3'
+services:
+  hallo:
+    build: .
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    volumes:
+      - ./:/app
+    command: sh -c "./script/download_models.sh && python3 app/main.py"
+    tty: true
+    ports:
+      - 7860:7860
