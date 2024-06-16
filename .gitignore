@@ -168,3 +168,4 @@ cython_debug/
 data
 pretrained_models
 test_data
+.SourceSageAssets

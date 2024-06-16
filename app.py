@@ -1,3 +1,5 @@
+
+
 # pylint: disable=E1101
 # scripts/inference.py
 
@@ -33,8 +35,6 @@ python scripts/inference.py --audio_path audio.wav --image_path image.jpg
 import argparse
 import os
 
-from loguru import logger
-
 from tqdm import tqdm
 
 import torch
@@ -52,76 +52,32 @@ from hallo.models.unet_2d_condition import UNet2DConditionModel
 from hallo.models.unet_3d import UNet3DConditionModel
 from hallo.utils.util import tensor_to_video
 
+import gradio as gr
+import argparse
+import logging
 
-class Net(nn.Module):
-    """
-    The Net class combines all the necessary modules for the inference process.
-    
-    Args:
-        reference_unet (UNet2DConditionModel): The UNet2DConditionModel used as a reference for inference.
-        denoising_unet (UNet3DConditionModel): The UNet3DConditionModel used for denoising the input audio.
-        face_locator (FaceLocator): The FaceLocator model used to locate the face in the input image.
-        imageproj (nn.Module): The ImageProjector model used to project the source image onto the face.
-        audioproj (nn.Module): The AudioProjector model used to project the audio embeddings onto the face.
-    """
-    def __init__(
-        self,
-        reference_unet: UNet2DConditionModel,
-        denoising_unet: UNet3DConditionModel,
-        face_locator: FaceLocator,
-        imageproj,
-        audioproj,
-    ):
+class GradioLogger(logging.Handler):
+    def __init__(self, textbox):
         super().__init__()
-        self.reference_unet = reference_unet
-        self.denoising_unet = denoising_unet
-        self.face_locator = face_locator
-        self.imageproj = imageproj
-        self.audioproj = audioproj
+        self.textbox = textbox
 
-    def forward(self,):
-        """
-        empty function to override abstract function of nn Module
-        """
+    def emit(self, record):
+        msg = self.format(record)
+        self.textbox.append(msg + "\n")
 
-    def get_modules(self):
-        """
-        Simple method to avoid too-few-public-methods pylint error
-        """
-        return {
-            "reference_unet": self.reference_unet,
-            "denoising_unet": self.denoising_unet,
-            "face_locator": self.face_locator,
-            "imageproj": self.imageproj,
-            "audioproj": self.audioproj,
-        }
+def inference_process(config_file, source_image, driving_audio, output, pose_weight, face_weight, lip_weight, face_expand_ratio, checkpoint, progress=gr.Progress(), log_textbox=gr.Textbox()):
+    logger = logging.getLogger(__name__)
+    logger.setLevel(logging.INFO)
+    gradio_handler = GradioLogger(log_textbox)
+    formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
+    gradio_handler.setFormatter(formatter)
+    logger.addHandler(gradio_handler)
 
-
-def process_audio_emb(audio_emb):
-    """
-    Process the audio embedding to concatenate with other tensors.
-
-    Parameters:
-        audio_emb (torch.Tensor): The audio embedding tensor to process.
-
-    Returns:
-        concatenated_tensors (List[torch.Tensor]): The concatenated tensor list.
-    """
-    concatenated_tensors = []
-
-    for i in range(audio_emb.shape[0]):
-        vectors_to_concat = [
-            audio_emb[max(min(i + j, audio_emb.shape[0]-1), 0)]for j in range(-2, 3)]
-        concatenated_tensors.append(torch.stack(vectors_to_concat, dim=0))
-
-    audio_emb = torch.stack(concatenated_tensors, dim=0)
-
-    return audio_emb
-
-
-def inference_process(args: argparse.Namespace):
-    logger.info(f"推論処理を開始します。コンフィグファイル: {args.config}")
+    start_time = time.time()
     
+    logger.info(f"推論処理を開始します。コンフィグファイル: {config_file}")
+    
+
     # 1. init config
     logger.info("コンフィグを初期化します。")
     config = OmegaConf.load(args.config)
@@ -380,33 +336,34 @@ def inference_process(args: argparse.Namespace):
     output_file = config.output
     logger.info(f"結果を {output_file} に保存")
     tensor_to_video(tensor_result, output_file, driving_audio_path)
-    
+
     logger.info("推論処理が完了しました。")
-    
 
-if __name__ == "__main__":
-    parser = argparse.ArgumentParser()
+inputs = [
+    gr.inputs.Textbox(label="Config File"),
+    gr.inputs.Image(label="Source Image"),
+    gr.inputs.Audio(label="Driving Audio"),
+    gr.inputs.Textbox(label="Output File"),
+    gr.inputs.Slider(minimum=0, maximum=1, step=0.1, default=1, label="Pose Weight"),
+    gr.inputs.Slider(minimum=0, maximum=1, step=0.1, default=1, label="Face Weight"),
+    gr.inputs.Slider(minimum=0, maximum=1, step=0.1, default=1, label="Lip Weight"),
+    gr.inputs.Slider(minimum=1, maximum=2, step=0.1, default=1.2, label="Face Expand Ratio"),
+    gr.inputs.Textbox(label="Checkpoint Directory (Optional)")
+]
 
-    parser.add_argument(
-        "-c", "--config", default="/app/configs/inference/default.yaml")
-    parser.add_argument("--source_image", type=str, required=False,
-                        help="source image", default="test_data/source_images/6.jpg")
-    parser.add_argument("--driving_audio", type=str, required=False,
-                        help="driving audio", default="test_data/driving_audios/singing/sing_4.wav")
-    parser.add_argument(
-        "--output", type=str, help="output video file name", default=".cache/output.mp4")
-    parser.add_argument(
-        "--pose_weight", type=float, help="weight of pose", default=1.0)
-    parser.add_argument(
-        "--face_weight", type=float, help="weight of face", default=1.0)
-    parser.add_argument(
-        "--lip_weight", type=float, help="weight of lip", default=1.0)
-    parser.add_argument(
-        "--face_expand_ratio", type=float, help="face region", default=1.2)
-    parser.add_argument(
-        "--checkpoint", type=str, help="which checkpoint", default=None)
+outputs = [
+    gr.Video(label="Output Video"),
+    gr.Textbox(label="Log Output")
+]
 
-
-    command_line_args = parser.parse_args()
-
-    inference_process(command_line_args)
+gr.Interface(
+    fn=inference_process,
+    inputs=inputs,
+    outputs=outputs,
+    title="Face Animation Inference",
+    description="Animate a face image based on driving audio using Gradio UI.",
+    allow_flagging=False,
+    show_progress=True,
+    progress="progress",
+    live=False
+).launch()

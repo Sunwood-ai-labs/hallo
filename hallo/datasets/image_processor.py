@@ -13,6 +13,7 @@ import torch
 from insightface.app import FaceAnalysis
 from PIL import Image
 from torchvision import transforms
+from loguru import logger
 
 from ..utils.util import get_mask
 
@@ -119,14 +120,17 @@ class ImageProcessor:
 
 
         # 2.1 detect face
+        logger.info(f">> 2.1 detect face")
         faces = self.face_analysis.get(cv2.cvtColor(np.array(ref_image_pil.copy()), cv2.COLOR_RGB2BGR))
         # use max size face
         face = sorted(faces, key=lambda x: (x["bbox"][2] - x["bbox"][0]) * (x["bbox"][3] - x["bbox"][1]))[-1]
 
         # 2.2 face embedding
+        logger.info(f">> 2.2 face embedding")
         face_emb = face["embedding"]
 
         # 2.3 render face mask
+        logger.info(f">> 2.3 render face mask")
         get_mask(source_image_path, cache_dir, face_region_ratio)
         file_name = os.path.basename(source_image_path).split(".")[0]
         face_mask_pil = Image.open(
