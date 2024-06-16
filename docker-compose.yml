@@ -11,7 +11,7 @@ services:
               capabilities: [gpu]
     volumes:
       - ./:/app
-    command: sh -c "./script/download_models.sh && python3 app/main.py"
+    command: sh -c "./scripts/download_models.sh && python3 app/main.py"
     tty: true
     ports:
       - 7860:7860
