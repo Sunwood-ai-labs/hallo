@@ -58,7 +58,7 @@ Function Details:
 Attributes:
     _ (str): Placeholder for static type checking
 """
-
+from loguru import logger
 import importlib
 import os
 import os.path as osp
@@ -395,6 +395,8 @@ def get_lip_mask(landmarks, height, width, out_path):
     lip_mask = np.zeros((height, width), dtype=np.uint8)
     lip_mask[round(min_xy_lip[1]):round(max_xy_lip[1]),
              round(min_xy_lip[0]):round(max_xy_lip[0])] = 255
+    
+    logger.info(f"out_path is {out_path}")
     cv2.imwrite(str(out_path), lip_mask)
 
 
@@ -420,6 +422,9 @@ def get_face_mask(landmarks, height, width, out_path, expand_ratio):
     face_mask[round(min_xy_face[1]):round(max_xy_face[1]),
               round(min_xy_face[0]):round(max_xy_face[0])] = 255
     cv2.imwrite(str(out_path), face_mask)
+    logger.info(f"out_path: {out_path}")
+    
+    
 
 
 def get_mask(file, cache_dir, face_expand_raio):
@@ -575,7 +580,8 @@ def get_sep_face_mask(file_path1, file_path2, output_file_path):
 
     # Save the result mask image
     cv2.imwrite(output_file_path, result_mask)
-    print(f"Processed and saved: {output_file_path}")
+    # print(f"Processed and saved: {output_file_path}")
+    logger.info(f"Processed and saved: {output_file_path}")
 
 def resample_audio(input_audio_file: str, output_audio_file: str, sample_rate: int):
     p = subprocess.Popen([
@@ -608,6 +614,8 @@ def get_face_region(image_path: str, detector):
 
         save_path = image_path.replace("images", "face_masks")
         os.makedirs(os.path.dirname(save_path), exist_ok=True)
+        
+        logger.info(f"Processed and saved {save_path}")
         cv2.imwrite(save_path, mask)
         # print(f"Processed and saved {save_path}")
         return image_path, mask
